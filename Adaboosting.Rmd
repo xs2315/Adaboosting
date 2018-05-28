@@ -1,0 +1,170 @@
+---
+title: "Adaboosting"
+author: "Xiaodi Sun"
+date: "2018/4/4"
+output: pdf_document
+---
+
+```{r}
+library("freestats")
+# calculate the cost of given theta
+cost <- function(theta, vec_x, vec_y, num, weights) {
+  labels <- rep(NA, num)
+  labels <- ifelse(vec_x > theta, 1 , -1)
+  cj <- sum(weights*(labels != vec_y))
+  return(cj)
+}
+
+cost2 <- function(theta, vec_x, vec_y, num, weights) {
+  labels <- rep(NA, num)
+  labels <- ifelse(vec_x > theta, -1 , 1)
+  cj <- sum(weights*(labels != vec_y))
+  return(cj)
+}
+# use the decisionStump function with weights w
+
+# 1. Construct three functions 
+# Weak learner training routine
+train <- function(X, w, y) {
+  n <- nrow(X)
+  p <- ncol(X)
+  minimum_cs = rep(n, p)
+  minimum_thetas = rep(-2, p)
+  minimum_ms = rep(NA, p)
+  for (j in 1:p) {
+    Xj <- X[,j]
+    unique_Xj <- unique(Xj)
+    unique_Xj <- c(unique_Xj, -2)
+    c_j <- apply(matrix(unique_Xj), 1, cost, vec_x=Xj, vec_y=y, num=n, weights=w)
+    c_j_2 <- apply(matrix(unique_Xj), 1, cost2, vec_x=Xj, vec_y=y, num=n, weights=w)
+    if (min(c_j_2) > min(c_j)) {
+      ind <- which.min(c_j)
+      minimum_ms[j] <- 1
+      minimum_cs[j] <- c_j[ind]
+      
+    } else {
+      ind <- which.min(c_j_2)
+      minimum_ms[j] <- -1
+      minimum_cs[j] <- c_j_2[ind]
+    }
+    minimum_thetas[j] <- unique_Xj[ind]
+  }
+  optimal_j <- which.min(minimum_cs)
+  optimal_theta <- minimum_thetas[optimal_j]
+  optimal_c <- minimum_cs[optimal_j]
+  optimal_m <- minimum_ms[optimal_j]
+  return(c(j=optimal_j, theta=optimal_theta, m=optimal_m))
+}
+# Classification routine
+classify <- function(X, pars) {
+  n <- nrow(X)
+  j <- pars[1]
+  theta <- pars[2]
+  m <- pars[3]
+  Xj <- X[,j]
+  labels <- rep(-m, n)
+  labels[Xj > theta] = m
+  return(matrix(labels))
+}
+# evaluation of the boosting classifier on X
+agg_class <- function(X, alpha, allPars) {
+  n <- nrow(X)
+  B <- length(alpha)
+  labels<-matrix(0,nrow=n,ncol=B)
+  if (B == 1) {
+    allPars <- rbind(allPars, matrix(0,1,3))
+  }
+  for(i in 1:B){
+    labels[,i]<-classify(X, allPars[i,])
+  }
+  labels<-labels %*% alpha
+  labels[labels >= 0] <- 1
+  labels[labels < 0] <- -1
+  return(labels)
+}
+
+Cross_validation <- function(X, y, allPars, alphas, b) {
+  K<-5
+  size <- n / K
+  cv_errors <- matrix(1,5,1)
+  for (k in 1:K) {
+    train_X <- X[-(((k-1)*size+1):(k*size)),]
+    train_y <- y[-(((k-1)*size+1):(k*size)),]
+    validation_X <- X[((k-1)*size+1):(k*size),]
+    validation_y <- y[((k-1)*size+1):(k*size),]
+    train_w <- w[-(((k-1)*size+1):(k*size)),]
+
+    # train weak learners
+    cv_pars <- train(train_X, train_w, train_y)		# [j, theta, m]
+    train_pred <- classify(train_X, cv_pars)	
+    training_error <- 1/ sum(train_w)* sum(train_w*(train_pred != train_y))
+    cv_alpha <- log((1-training_error)/training_error)
+    cv_labels <- agg_class(validation_X, c(alphas[0:(b-1),], cv_alpha), rbind(allPars[0:(b-1),], cv_pars))
+    cv_error <- mean(cv_labels != validation_y)
+    cv_errors[k,] <- cv_error
+  }
+  return(mean(cv_errors))
+}
+
+# 2. Implement of the functions for decision stumps.
+AdaBoost <- function(B, X, y, test_X, test_y){
+	w <- as.matrix(rep(1/n, n))	
+	alphas <- as.matrix(rep(0, B))
+	allPars <- matrix(rep(0, 3*B), ncol = 3)
+	# set boxs for training, cv and test errors
+	errors <- matrix(rep(0, 3*B), ncol = 3)	
+	for (b in 1 : B) {
+		# get 5 fold cross validation error rate
+		cv_error <- Cross_validation(X, y, allPars, alphas, b)
+		# train weak learners
+		pars <- train(X, w, y)	
+		labels <- classify(X, pars)	
+		error_rate <- sum(w*(labels != y)) / sum(w)
+		alpha <- log((1-error_rate)/error_rate)
+		alphas[b,] <- alpha
+		allPars[b,] <- pars
+		w <- w * exp(alpha * (labels != y))		# n x 1
+		# calcualte test error
+		test_labels <- agg_class(test_X, alphas[1:b,], allPars[1:b,])
+		test_error <- mean(test_labels != test_y)
+		errors[b,1] <- error_rate
+		errors[b,2] <- cv_error
+		errors[b,3] <- test_error
+	}
+   return(cbind(alphas, allPars, errors))
+}
+
+
+# 3.Run algorithm on USPS data, evaluate results using cross validation
+zip.3<-read.table("train_3.txt",header = FALSE, sep=",")
+zip.8<-read.table("train_8.txt",header = FALSE, sep=",")
+TrainX <- rbind(zip.3, zip.8)	
+n.3<-length(zip.3[,1])
+n.8<-length(zip.8[,1])
+Trainy <- rep(c(1,-1), c(n.3, n.8))
+Trainy <- as.matrix(Trainy)
+test <- read.table("zip_test.txt",header = F)
+test <- as.matrix(test)
+test<-test[test[,1]==3|test[,1]==8,]
+TestX <- test[,-1]
+Testy <- test[,1]
+Testy[Testy == 3] <- 1
+Testy[Testy == 8] <- -1
+Testy <- as.matrix(Testy)
+
+n <- nrow(TrainX)
+w <- as.matrix(rep(1/n, n))
+result <- AdaBoost(100, TrainX, Trainy, TestX, Testy)
+
+
+# 4.Plots of the training error and the test error as a function of b
+plot(1:100,result[,6], type = "l",main="Training Error vs Test Error",xlab="b",ylab="error",col=1)
+lines(1:100,result[,7], type = "l",col=2)
+legend("topright",legend=c("Training Error","Test Error"),fill=1:2)
+```
+
+
+
+
+
+
